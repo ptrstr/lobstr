@@ -36,16 +36,16 @@
 #elif ARCH_X32
 #define JUMP(variable, address) \
 	uint8_t variable[] = { \
-		0x68, 0x00, 0x00, 0x00, 0x00, /* mov rax, 0x0 */ \
-		0xc3                          /* jmp rax */ \
+		0x68, 0x00, 0x00, 0x00, 0x00, /* push 0x00000000 */ \
+		0xc3                          /* ret */ \
 	}; \
 	\
 	*(void **)((uintptr_t)&variable + 1) = address;
 #elif ARCH_X64
 #define JUMP(variable, address) \
 	uint8_t variable[] = { \
-		0x48, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* mov rax, 0x0 */ \
-		0xff, 0xe0                                                  /* jmp rax */ \
+		0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* mov r8, 0x0 */ \
+		0x41, 0xff, 0xe0                                            /* jmp r8 */ \
 	}; \
 	\
 	*(void **)((uintptr_t)&variable + 2) = address;
@@ -158,7 +158,6 @@ void *allocateTrampoline(void *buffer, uintptr_t bufferSize) {
 	JUMP(origContinuationJumpPatch, (void *)((uintptr_t)buffer + bufferSize))
 
 	uintmax_t fullSize = bufferSize + sizeof(origContinuationJumpPatch);
-
 
 	#if PLAT_WINDOWS
 	void *trampoline = VirtualAlloc(NULL, fullSize, MEM_COMMIT | MEM_RESERVE, PAGE_NOACCESS);
