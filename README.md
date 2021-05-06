@@ -27,7 +27,7 @@ This project was made to be as easy as possible to use. Here is an example:
 #include <stdio.h>
 
 void integerPrinter(int value) {
-  printf(""Your modified? integer: %d\n", value);
+  printf("Your modified? integer: %d\n", value);
 }
 
 void (*originalIntegerPrinter)(int);
