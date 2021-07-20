@@ -57,6 +57,16 @@ enum protection {
 	EXECUTE = 1 << 2
 };
 
+
+typedef struct _hook_t {
+	void *original;
+	void *trampoline;
+	uintmax_t trampolineSize;
+} hook_t
+
+static hook_t *hooks;
+static uintmax_t hooksSize;
+
 uint8_t changeProtection(void *address, uintmax_t size, uint8_t protection) {
 	#if PLAT_WINDOWS
 	uintptr_t pageSize;
@@ -203,6 +213,11 @@ EXPORT uint8_t allocHook(void *hook, void **original) {
 	if (hook == NULL || original == NULL)
 		return 1;
 
+	hooksSize++;
+	hooks = (hook_t)realloc(hooks, hooksSize * sizeof(hook_t));
+	if (!hooks)
+		return 1;
+
 	JUMP(hookJumpPatch, hook)
 
 	if (changeProtection(*original, sizeof(hookJumpPatch), READ | WRITE | EXECUTE))
@@ -218,12 +233,33 @@ EXPORT uint8_t allocHook(void *hook, void **original) {
 
 	memcpy(*original, &hookJumpPatch, sizeof(hookJumpPatch));
 
-	*original = trampoline;
+	hooks[hooksSize - 1].original = *original;
+	hooks[hooksSize - 1].trampoline = trampoline;
+	hooks[hooksSize - 1].trampolineSize = instructionSizes;
 
+	*original = trampoline;
 
 	return 0;
 }
 
-EXPORT uint8_t freeHook(void *hook, void **original) {
-	return 0;
+EXPORT uint8_t freeHook(void **original) {
+	if (original == NULL || hooks == NULL || hooksSize == 0)
+		return 1;
+
+	for (size_t i = 0; i < hooksSize; i++)
+		if (hooks[i].trampoline == *original) {
+			if (freeMap(hooks[i].trampoline, hooks[i].trampolineSize))
+				return 1;
+
+			*original = hooks[i].original;
+
+			hooksSize--;
+			hooks = (hook_t *)realloc(hooks, hooksSize * sizeof(hook_t));
+			if (!hooks)
+				return 1;
+
+			return 0;
+		}
+
+	return 1;
 }
