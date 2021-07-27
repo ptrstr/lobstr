@@ -3,12 +3,19 @@
 #ifndef LOBSTR_H_INCLUDED
 #define LOBSTR_H_INCLUDED
 
+typedef struct _hook_t {
+	void *original;
+	void *trampoline;
+	uintmax_t trampolineSize;
+	uintmax_t trampolineJumpSize;
+} hook_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-uint8_t allocHook(void *hook, void **original);
-uint8_t freeHook(void *hook, void **original);
+hook_t *allocHook(void *hook, void **original);
+void freeHook(hook_t *hookCtx);
 
 #ifdef __cplusplus
 }

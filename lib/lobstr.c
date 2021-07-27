@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <capstone/capstone.h>
+#include <lobstr.h>
 
 #define PLAT_WINDOWS defined _WIN32 || defined _WIN64
 #define PLAT_UNIX defined __unix__
@@ -16,7 +17,7 @@
 #define EXPORT __declspec(dllexport)
 #define werror(function) { \
 	char *errorMessage = NULL; \
-    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &errorMessage, 0, NULL); \
+	FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &errorMessage, 0, NULL); \
 	fprintf(stderr, function ": %s\r\n", errorMessage); \
 	LocalFree(errorMessage); \
 }
@@ -57,22 +58,12 @@ enum protection {
 	EXECUTE = 1 << 2
 };
 
-
-typedef struct _hook_t {
-	void *original;
-	void *trampoline;
-	uintmax_t trampolineSize;
-} hook_t
-
-static hook_t *hooks;
-static uintmax_t hooksSize;
-
 uint8_t changeProtection(void *address, uintmax_t size, uint8_t protection) {
 	#if PLAT_WINDOWS
 	uintptr_t pageSize;
 	{
-    	SYSTEM_INFO info;
-    	GetSystemInfo(&info);
+	    	SYSTEM_INFO info;
+	    	GetSystemInfo(&info);
 		pageSize = info.dwPageSize;
 	}
 	#elif PLAT_UNIX
@@ -100,6 +91,7 @@ uint8_t changeProtection(void *address, uintmax_t size, uint8_t protection) {
 	}
 	#elif PLAT_UNIX
 	int platformProtection = (!!(protection & READ) * PROT_READ) | (!!(protection & WRITE) * PROT_WRITE) | (!!(protection & EXECUTE) * PROT_EXEC);
+
 	if (mprotect((void *)pagedAddress, pageSize, platformProtection)) {
 		perror("mprotect");
 		return 1;
@@ -140,6 +132,8 @@ uintptr_t getInstructionSizeForMinimum(void *buffer, uintmax_t minimum) {
 		while ((instructionCount = cs_disasm(handle, (void *)((uintptr_t)buffer + finalSize), ++instructionSize, 0, 1, &instruction)) != 1)
 			cs_free(instruction, instructionCount);
 
+		cs_free(instruction, instructionCount);
+
 		finalSize += instructionSize;
 	}
 
@@ -164,10 +158,13 @@ uint8_t freeMap(void *map, uintmax_t size) {
 	return 0;
 }
 
-void *allocateTrampoline(void *buffer, uintptr_t bufferSize) {
-	JUMP(origContinuationJumpPatch, (void *)((uintptr_t)buffer + bufferSize))
+void *allocateTrampoline(void *buffer, uintptr_t *bufferSize) {
+	if (!buffer || !bufferSize)
+		return NULL;
 
-	uintmax_t fullSize = bufferSize + sizeof(origContinuationJumpPatch);
+	JUMP(origContinuationJumpPatch, (void *)((uintptr_t)buffer + *bufferSize))
+
+	uintmax_t fullSize = *bufferSize + sizeof(origContinuationJumpPatch);
 
 	#if PLAT_WINDOWS
 	void *trampoline = VirtualAlloc(NULL, fullSize, MEM_COMMIT | MEM_RESERVE, PAGE_NOACCESS);
@@ -189,7 +186,6 @@ void *allocateTrampoline(void *buffer, uintptr_t bufferSize) {
 	}
 
 	void *trampoline = mmap(NULL, fullSize, PROT_NONE, MAP_PRIVATE, fd, 0);
-
 	fclose(fp);
 
 	if (trampoline == MAP_FAILED) {
@@ -203,63 +199,56 @@ void *allocateTrampoline(void *buffer, uintptr_t bufferSize) {
 		return NULL;
 	}
 
-	memcpy(trampoline, buffer, bufferSize);
-	memcpy((void *)((uintptr_t)trampoline + bufferSize), origContinuationJumpPatch, sizeof(origContinuationJumpPatch));
+	memcpy(trampoline, buffer, *bufferSize);
+	memcpy((void *)((uintptr_t)trampoline + *bufferSize), origContinuationJumpPatch, sizeof(origContinuationJumpPatch));
+
+	*bufferSize = fullSize;
 
 	return trampoline;
 }
 
-EXPORT uint8_t allocHook(void *hook, void **original) {
+EXPORT hook_t *allocHook(void *hook, void **original) {
 	if (hook == NULL || original == NULL)
-		return 1;
+		return NULL;
 
-	hooksSize++;
-	hooks = (hook_t)realloc(hooks, hooksSize * sizeof(hook_t));
-	if (!hooks)
-		return 1;
+	hook_t *hookCtx = (hook_t *)malloc(sizeof(hook_t));
+	if (!hook)
+		return NULL;
 
 	JUMP(hookJumpPatch, hook)
 
 	if (changeProtection(*original, sizeof(hookJumpPatch), READ | WRITE | EXECUTE))
-		return 1;
+		return NULL;
 
-	const uintptr_t instructionSizes = getInstructionSizeForMinimum(*original, sizeof(hookJumpPatch));
+	uintptr_t instructionSizes = getInstructionSizeForMinimum(*original, sizeof(hookJumpPatch));
 	if (instructionSizes == 0)
-		return 1;
+		return NULL;
 
-	void *trampoline = allocateTrampoline(*original, instructionSizes);
+	hookCtx->trampolineJumpSize = sizeof(hookJumpPatch);
+
+	void *trampoline = allocateTrampoline(*original, &instructionSizes);
 	if (trampoline == NULL)
-		return 1;
+		return NULL;
 
 	memcpy(*original, &hookJumpPatch, sizeof(hookJumpPatch));
 
-	hooks[hooksSize - 1].original = *original;
-	hooks[hooksSize - 1].trampoline = trampoline;
-	hooks[hooksSize - 1].trampolineSize = instructionSizes;
+	hookCtx->original = *original;
+	hookCtx->trampoline = trampoline;
+	hookCtx->trampolineSize = instructionSizes;
+	hookCtx->trampolineJumpSize = instructionSizes - hookCtx->trampolineJumpSize;
 
 	*original = trampoline;
 
-	return 0;
+	return hookCtx;
 }
 
-EXPORT uint8_t freeHook(void **original) {
-	if (original == NULL || hooks == NULL || hooksSize == 0)
-		return 1;
+EXPORT void freeHook(hook_t *hookCtx) {
+	if (!hookCtx)
+		return;
 
-	for (size_t i = 0; i < hooksSize; i++)
-		if (hooks[i].trampoline == *original) {
-			if (freeMap(hooks[i].trampoline, hooks[i].trampolineSize))
-				return 1;
+	memcpy(hookCtx->original, hookCtx->trampoline, hookCtx->trampolineSize - hookCtx->trampolineJumpSize);
 
-			*original = hooks[i].original;
+	freeMap(hookCtx->trampoline, hookCtx->trampolineSize);
 
-			hooksSize--;
-			hooks = (hook_t *)realloc(hooks, hooksSize * sizeof(hook_t));
-			if (!hooks)
-				return 1;
-
-			return 0;
-		}
-
-	return 1;
+	free(hookCtx);
 }
