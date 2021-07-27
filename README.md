@@ -40,13 +40,16 @@ void hookedIntegerPrinter(int value) {
 
 int main(int argc, char *argv[]) {
   originalIntegerPrinter = &integerPrinter;
-  
-  // Returns 1 on error
-  if (allocHook((void *)hookedIntegerPrinter, (void **)&originalIntegerPrinter))
+
+  // Returns NULL on error
+  hook_t *hook = allocHook((void *)hookedIntegerPrinter, (void **)&originalIntegerPrinter);
+  if (!hook)
     return 1;
-   
+
   integerPrinter(55);
-  
+
+  freeHook(hook);
+
   return 0;
 }
 ```
