@@ -4,52 +4,42 @@
 #include <stdio.h>
 #include <capstone/capstone.h>
 #include <lobstr.h>
-
-#define PLAT_WINDOWS defined _WIN32 || defined _WIN64
-#define PLAT_UNIX defined __unix__
-#define ARCH_ARM defined _M_ARM || defined __arm__
-#define ARCH_ARM64 defined __aarch64__
-#define ARCH_X32 defined _M_IX86 || defined __i386__
-#define ARCH_X64 defined _M_X64 || defined __amd64__
+#include "platform.h"
 
 #if PLAT_WINDOWS
-#include <windows.h>
-#define EXPORT __declspec(dllexport)
-#define werror(function) { \
-	char *errorMessage = NULL; \
-	FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &errorMessage, 0, NULL); \
-	fprintf(stderr, function ": %s\r\n", errorMessage); \
-	LocalFree(errorMessage); \
-}
-
+#	include <windows.h>
+#	define EXPORT __declspec(dllexport)
+#	define werror(function) { \
+		char *errorMessage = NULL; \
+		FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), &errorMessage, 0, NULL); \
+		fprintf(stderr, function ": %s\r\n", errorMessage); \
+		LocalFree(errorMessage); \
+	}
 #elif PLAT_UNIX
-#include <dlfcn.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
-#define EXPORT
-#else
-#error "Only Windows (x32/x64) and Unix (x32/x64) targets are supported"
+#	include <dlfcn.h>
+#	include <sys/mman.h>
+#	include <unistd.h>
+#	define EXPORT
 #endif // PLAT_WINDOWS
 
 #if ARCH_ARM || ARCH_ARM64
-#error "ARM not yet supported"
+#	error "ARM not yet supported"
 #elif ARCH_X32
-#define JUMP(variable, address) \
-	uint8_t variable[] = { \
-		0x68, 0x00, 0x00, 0x00, 0x00, /* push 0x00000000 */ \
-		0xc3                          /* ret */ \
-	}; \
-	\
-	*(void **)((uintptr_t)&variable + 1) = address;
+#	define JUMP(variable, address) \
+		uint8_t variable[] = { \
+			0x68, 0x00, 0x00, 0x00, 0x00, /* push 0x00000000 */ \
+			0xc3                          /* ret */ \
+		}; \
+		\
+		*(void **)((uintptr_t)&variable + 1) = address;
 #elif ARCH_X64
-#define JUMP(variable, address) \
-	uint8_t variable[] = { \
-		0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* mov r8, 0x0 */ \
-		0x41, 0xff, 0xe0                                            /* jmp r8 */ \
-	}; \
-	\
-	*(void **)((uintptr_t)&variable + 2) = address;
+#	define JUMP(variable, address) \
+		uint8_t variable[] = { \
+			0x49, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* mov r8, 0x0 */ \
+			0x41, 0xff, 0xe0                                            /* jmp r8 */ \
+		}; \
+		\
+		*(void **)((uintptr_t)&variable + 2) = address;
 #endif // ARCH_ARM || ARCH_ARM64
 
 enum protection {
