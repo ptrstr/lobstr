@@ -52,8 +52,8 @@ uint8_t changeProtection(void *address, uintmax_t size, uint8_t protection) {
 	#if PLAT_WINDOWS
 	uintptr_t pageSize;
 	{
-	    	SYSTEM_INFO info;
-	    	GetSystemInfo(&info);
+	    SYSTEM_INFO info;
+	    GetSystemInfo(&info);
 		pageSize = info.dwPageSize;
 	}
 	#elif PLAT_UNIX
@@ -201,44 +201,52 @@ EXPORT hook_t *allocHook(void *hook, void **original) {
 	if (hook == NULL || original == NULL)
 		return NULL;
 
-	hook_t *hookCtx = (hook_t *)malloc(sizeof(hook_t));
-	if (!hook)
+	hook_t *hookCtx = (hook_t *)calloc(1, sizeof(hook_t));
+	if (!hookCtx)
 		return NULL;
 
 	JUMP(hookJumpPatch, hook)
 
 	if (changeProtection(*original, sizeof(hookJumpPatch), READ | WRITE | EXECUTE))
-		return NULL;
+		goto error;
 
-	uintptr_t instructionSizes = getInstructionSizeForMinimum(*original, sizeof(hookJumpPatch));
-	if (instructionSizes == 0)
-		return NULL;
+	const uintptr_t originalInstructionsSize = getInstructionSizeForMinimum(*original, sizeof(hookJumpPatch));
+	if (originalInstructionsSize < sizeof(hookJumpPatch))
+		goto error;
 
-	hookCtx->trampolineJumpSize = sizeof(hookJumpPatch);
+	hookCtx->trampolineSize = originalInstructionsSize;
 
-	void *trampoline = allocateTrampoline(*original, &instructionSizes);
+	void *trampoline = allocateTrampoline(*original, &(hookCtx->trampolineSize));
 	if (trampoline == NULL)
-		return NULL;
+		goto error;
 
 	memcpy(*original, &hookJumpPatch, sizeof(hookJumpPatch));
 
 	hookCtx->original = *original;
 	hookCtx->trampoline = trampoline;
-	hookCtx->trampolineSize = instructionSizes;
-	hookCtx->trampolineJumpSize = instructionSizes - hookCtx->trampolineJumpSize;
+	hookCtx->trampolineJumpSize = hookCtx->trampolineSize - originalInstructionsSize;
 
 	*original = trampoline;
 
 	return hookCtx;
+
+error:
+	if (hookCtx)
+		freeHook(hookCtx);
+
+	return NULL;
 }
 
 EXPORT void freeHook(hook_t *hookCtx) {
 	if (!hookCtx)
 		return;
 
-	memcpy(hookCtx->original, hookCtx->trampoline, hookCtx->trampolineSize - hookCtx->trampolineJumpSize);
+	if (hookCtx->trampoline) {
+		if (hookCtx->original && hookCtx->trampolineSize > hookCtx->trampolineJumpSize)
+			memcpy(hookCtx->original, hookCtx->trampoline, hookCtx->trampolineSize - hookCtx->trampolineJumpSize);
 
-	freeMap(hookCtx->trampoline, hookCtx->trampolineSize);
+		freeMap(hookCtx->trampoline, hookCtx->trampolineSize);
+	}
 
 	free(hookCtx);
 }
